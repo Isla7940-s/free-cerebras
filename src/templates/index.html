@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cerebras 注册管理工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #0f172a; }
+        .card { background: #1e293b; border: 1px solid #334155; }
+        .glass { backdrop-filter: blur(12px); background: rgba(30,41,59,0.85); }
+        .btn-primary { background: #3b82f6; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-success { background: #22c55e; }
+        .btn-success:hover { background: #16a34a; }
+        .badge-ok { background: #166534; color: #4ade80; }
+        .badge-fail { background: #7f1d1d; color: #fca5a5; }
+        .badge-wait { background: #78350f; color: #fde68a; }
+        .badge-unknown { background: #374151; color: #9ca3af; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .spinner { border: 3px solid #334155; border-top: 3px solid #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 0.8s linear infinite; display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .key-text { font-family: 'Consolas', 'Monaco', monospace; font-size: 0.75rem; }
+        .toast { position: fixed; top: 20px; right: 20px; z-index: 999; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="text-gray-200 min-h-screen">
+
+<!-- Toast 通知 -->
+<div id="toast" class="toast hidden">
+    <div class="card rounded-lg px-5 py-3 shadow-xl border-l-4 border-blue-500 fade-in">
+        <span id="toast-msg"></span>
+    </div>
+</div>
+
+<!-- IP 切换提醒弹窗 -->
+<div id="ip-modal" class="fixed inset-0 z-[100] hidden">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+        <div class="card rounded-2xl shadow-2xl border border-yellow-500/30 max-w-md w-full fade-in p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center text-yellow-400 text-xl">!</div>
+                <h3 class="text-lg font-bold text-white">建议更换 IP</h3>
+            </div>
+            <p class="text-gray-300 text-sm mb-2">
+                已成功注册 <span id="ip-done-count" class="text-yellow-400 font-bold">0</span> 个账号。
+                为降低被检测风险，建议您现在切换 IP 地址后再继续。
+            </p>
+            <p class="text-gray-500 text-xs mb-5">注册已暂停，点击按钮后将继续。</p>
+
+            <button onclick="ipRespond('continue')"
+                class="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition">
+                好的，请继续
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 顶部导航 -->
+<nav class="glass sticky top-0 z-50 border-b border-gray-700">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white text-lg">C</div>
+            <h1 class="text-xl font-bold text-white">Cerebras 注册管理</h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500">IP提醒:</span>
+                <select id="ip-interval-select" onchange="setIpInterval(this.value)"
+                    class="bg-gray-800/80 border border-gray-600 rounded-lg px-2 py-1 text-xs text-white focus:ring-1 focus:ring-blue-500 outline-none">
+                    <option value="0">关闭</option>
+                    <option value="3">每3个</option>
+                    <option value="5" selected>每5个</option>
+                    <option value="10">每10个</option>
+                    <option value="15">每15个</option>
+                    <option value="20">每20个</option>
+                </select>
+            </div>
+            <button onclick="exportKeys()" class="text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5">
+                <span>导出 Key</span>
+            </button>
+            <span class="text-sm text-gray-400" id="account-count">-</span>
+            <button onclick="loadAccounts()" class="text-sm text-blue-400 hover:text-blue-300 transition">刷新</button>
+        </div>
+    </div>
+</nav>
+
+<div class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="card rounded-xl p-5">
+            <div class="text-sm text-gray-400 mb-1">总账号数</div>
+            <div class="text-3xl font-bold text-white" id="stat-total">0</div>
+        </div>
+        <div class="card rounded-xl p-5">
+            <div class="text-sm text-gray-400 mb-1">有效 Key</div>
+            <div class="text-3xl font-bold text-green-400" id="stat-valid">-</div>
+        </div>
+        <div class="card rounded-xl p-5">
+            <div class="text-sm text-gray-400 mb-1">无效 Key</div>
+            <div class="text-3xl font-bold text-red-400" id="stat-invalid">-</div>
+        </div>
+        <div class="card rounded-xl p-5">
+            <div class="text-sm text-gray-400 mb-1">注册状态</div>
+            <div class="text-lg font-semibold" id="stat-reg">空闲</div>
+        </div>
+    </div>
+
+    <!-- 操作栏 -->
+    <div class="card rounded-xl p-5">
+        <div class="flex flex-wrap items-center gap-4">
+            <!-- 测试 Key -->
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-400">模型:</label>
+                <select id="model-select" class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="qwen-3-32b">qwen-3-32b</option>
+                    <option value="llama-4-scout-17b-16e-instruct">llama-4-scout-17b</option>
+                    <option value="llama3.1-8b">llama3.1-8b</option>
+                    <option value="zai-glm-4.7">zai-glm-4.7</option>
+                </select>
+            </div>
+            <button onclick="testAllKeys()" id="btn-test-all" class="btn-primary text-white px-5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+                <span>批量测试 Key</span>
+            </button>
+
+            <div class="flex-1"></div>
+
+            <!-- 注册 -->
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-400">数量:</label>
+                <input type="number" id="reg-count" value="1" min="1" max="50"
+                    class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white w-20 focus:ring-2 focus:ring-blue-500 outline-none">
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-400">并行:</label>
+                <input type="number" id="reg-parallel" value="2" min="1" max="5"
+                    class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white w-20 focus:ring-2 focus:ring-blue-500 outline-none">
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="text-sm text-gray-400">速度:</label>
+                <select id="speed-mode" onchange="setSpeedMode(this.value)"
+                    class="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none">
+                    <option value="fast">快速</option>
+                    <option value="standard" selected>标准</option>
+                    <option value="slow">缓慢</option>
+                </select>
+            </div>
+            <button onclick="startRegister()" id="btn-register" class="btn-success text-white px-5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2">
+                <span>开始注册</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 注册进度 -->
+    <div id="register-panel" class="card rounded-xl p-5 hidden fade-in">
+        <div class="flex items-center justify-between mb-3">
+            <h3 id="reg-title" class="font-semibold text-white flex items-center gap-2">
+                <div class="spinner"></div>
+                <span>注册进行中</span>
+            </h3>
+            <span class="text-sm text-gray-400" id="reg-progress">0/0</span>
+        </div>
+        <!-- 阶段指示 -->
+        <div class="flex items-center gap-3 mb-3">
+            <span class="text-sm text-gray-400">当前阶段:</span>
+            <span id="reg-phase" class="text-sm font-medium text-blue-400 bg-blue-500/10 px-3 py-1 rounded-full">初始化</span>
+            <span class="text-sm text-gray-500" id="reg-current-info"></span>
+        </div>
+        <div class="w-full bg-gray-700 rounded-full h-2 mb-4">
+            <div id="reg-bar" class="bg-blue-500 h-2 rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+        <!-- 已完成的账号 -->
+        <div id="reg-results" class="mb-3 space-y-1 hidden max-h-40 overflow-y-auto no-scrollbar"></div>
+        <!-- 日志 -->
+        <div id="reg-log" class="bg-gray-900 rounded-lg p-3 max-h-56 overflow-y-auto no-scrollbar text-xs text-gray-400 space-y-0.5 font-mono">
+        </div>
+    </div>
+
+    <!-- 账号列表 -->
+    <div class="card rounded-xl overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-700 flex items-center justify-between">
+            <h2 class="font-semibold text-white text-lg">已注册账号</h2>
+            <span class="text-sm text-gray-500">点击 Key 可复制</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr class="text-left text-sm text-gray-400 border-b border-gray-700">
+                        <th class="px-5 py-3 font-medium">#</th>
+                        <th class="px-5 py-3 font-medium">用户名</th>
+                        <th class="px-5 py-3 font-medium">邮箱</th>
+                        <th class="px-5 py-3 font-medium">API Key</th>
+                        <th class="px-5 py-3 font-medium">注册时间</th>
+                        <th class="px-5 py-3 font-medium">Key 状态</th>
+                        <th class="px-5 py-3 font-medium">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="accounts-tbody">
+                    <tr><td colspan="7" class="px-5 py-8 text-center text-gray-500">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 水印 -->
+    <div class="text-center py-6 text-gray-600 text-xs">By Isla7940</div>
+</div>
+
+<script>
+let accounts = [];
+let testResults = {};
+
+function showToast(msg, duration = 3000) {
+    const t = document.getElementById('toast');
+    document.getElementById('toast-msg').textContent = msg;
+    t.classList.remove('hidden');
+    setTimeout(() => t.classList.add('hidden'), duration);
+}
+
+function copyKey(key) {
+    navigator.clipboard.writeText(key).then(() => showToast('已复制到剪贴板'));
+}
+
+function maskKey(key) {
+    if (!key || key.length < 16) return key;
+    return key.slice(0, 8) + '····' + key.slice(-8);
+}
+
+function badgeHtml(status) {
+    if (status === true) return '<span class="badge-ok px-2 py-1 rounded-full text-xs font-medium">有效</span>';
+    if (status === false) return '<span class="badge-fail px-2 py-1 rounded-full text-xs font-medium">无效</span>';
+    if (status === 'testing') return '<span class="badge-wait px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1"><span class="spinner" style="width:12px;height:12px;border-width:2px;"></span>测试中</span>';
+    return '<span class="badge-unknown px-2 py-1 rounded-full text-xs font-medium">未测试</span>';
+}
+
+function renderAccounts() {
+    const tbody = document.getElementById('accounts-tbody');
+    if (accounts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-5 py-8 text-center text-gray-500">暂无已注册账号</td></tr>';
+        document.getElementById('stat-total').textContent = '0';
+        document.getElementById('account-count').textContent = '0 个账号';
+        return;
+    }
+    document.getElementById('stat-total').textContent = accounts.length;
+    document.getElementById('account-count').textContent = accounts.length + ' 个账号';
+
+    let html = '';
+    accounts.forEach((a, i) => {
+        const keyStatus = testResults[a.api_key] !== undefined ? testResults[a.api_key] : null;
+        html += `
+        <tr class="border-b border-gray-800 hover:bg-gray-800/50 transition">
+            <td class="px-5 py-3 text-sm text-gray-500">${i + 1}</td>
+            <td class="px-5 py-3 text-sm font-medium text-white">${a.name}</td>
+            <td class="px-5 py-3 text-sm text-gray-300">${a.email}</td>
+            <td class="px-5 py-3">
+                <code class="key-text text-blue-400 cursor-pointer hover:text-blue-300 transition" 
+                      onclick="copyKey('${a.api_key}')" title="点击复制: ${a.api_key}">
+                    ${maskKey(a.api_key)}
+                </code>
+            </td>
+            <td class="px-5 py-3 text-sm text-gray-400">${a.time}</td>
+            <td class="px-5 py-3">${badgeHtml(keyStatus)}</td>
+            <td class="px-5 py-3">
+                <div class="flex items-center gap-2">
+                    <button onclick="testOneKey('${a.api_key}', ${i})" class="text-xs text-blue-400 hover:text-blue-300 transition">测试</button>
+                    <button onclick="deleteAccount('${a.api_key}')" class="text-xs text-red-400 hover:text-red-300 transition">删除</button>
+                </div>
+            </td>
+        </tr>`;
+    });
+    tbody.innerHTML = html;
+}
+
+async function loadAccounts() {
+    try {
+        const resp = await fetch('/api/accounts');
+        accounts = await resp.json();
+        renderAccounts();
+    } catch (e) {
+        showToast('加载账号失败: ' + e.message);
+    }
+}
+
+async function testOneKey(apiKey, idx) {
+    const model = document.getElementById('model-select').value;
+    testResults[apiKey] = 'testing';
+    renderAccounts();
+    try {
+        const resp = await fetch('/api/test_key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey, model }),
+        });
+        const r = await resp.json();
+        testResults[apiKey] = r.valid;
+        renderAccounts();
+        updateStats();
+        if (r.valid) {
+            showToast('Key 有效' + (r.reply ? ': ' + r.reply.slice(0, 40) : ''));
+        } else {
+            showToast('Key 无效: ' + (r.error || '未知错误'));
+        }
+    } catch (e) {
+        testResults[apiKey] = false;
+        renderAccounts();
+        showToast('测试失败: ' + e.message);
+    }
+}
+
+async function testAllKeys() {
+    const model = document.getElementById('model-select').value;
+    const btn = document.getElementById('btn-test-all');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span><span>测试中...</span>';
+    accounts.forEach(a => { testResults[a.api_key] = 'testing'; });
+    renderAccounts();
+
+    try {
+        const resp = await fetch('/api/test_all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+        });
+        const results = await resp.json();
+        results.forEach(r => { testResults[r.api_key] = r.valid; });
+        renderAccounts();
+        updateStats();
+        const valid = results.filter(r => r.valid).length;
+        showToast(`测试完成: ${valid}/${results.length} 个 Key 有效`);
+    } catch (e) {
+        showToast('批量测试失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<span>批量测试 Key</span>';
+    }
+}
+
+function updateStats() {
+    const vals = Object.values(testResults).filter(v => v !== 'testing');
+    const valid = vals.filter(v => v === true).length;
+    const invalid = vals.filter(v => v === false).length;
+    document.getElementById('stat-valid').textContent = valid;
+    document.getElementById('stat-invalid').textContent = invalid;
+}
+
+async function deleteAccount(apiKey) {
+    if (!confirm('确定删除该账号？')) return;
+    try {
+        const resp = await fetch('/api/delete_account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey }),
+        });
+        const r = await resp.json();
+        showToast(r.msg);
+        if (r.ok) {
+            delete testResults[apiKey];
+            loadAccounts();
+        }
+    } catch (e) {
+        showToast('删除失败: ' + e.message);
+    }
+}
+
+async function startRegister() {
+    const count = parseInt(document.getElementById('reg-count').value) || 1;
+    const parallel = parseInt(document.getElementById('reg-parallel').value) || 1;
+    const btn = document.getElementById('btn-register');
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/register/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ count, parallel }),
+        });
+        const r = await resp.json();
+        showToast(r.msg);
+        if (r.ok) {
+            document.getElementById('register-panel').classList.remove('hidden');
+            pollRegisterStatus();
+        }
+    } catch (e) {
+        showToast('启动注册失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function colorLog(line) {
+    if (line.startsWith('[OK]') || line.startsWith('[INF]')) return `<div class="text-gray-300">${line}</div>`;
+    if (line.startsWith('[WRN]')) return `<div class="text-yellow-400">${line}</div>`;
+    if (line.startsWith('[ERR]') || line.startsWith('[FAIL]')) return `<div class="text-red-400">${line}</div>`;
+    if (line.includes('━━━')) return `<div class="text-blue-400 font-semibold mt-1">${line}</div>`;
+    return `<div>${line}</div>`;
+}
+
+async function pollRegisterStatus() {
+    try {
+        const resp = await fetch('/api/register/status');
+        const s = await resp.json();
+        const pct = s.total > 0 ? Math.round((s.done / s.total) * 100) : 0;
+        document.getElementById('reg-progress').textContent = `${s.done}/${s.total} 完成`;
+        document.getElementById('reg-bar').style.width = pct + '%';
+        document.getElementById('stat-reg').textContent = s.running ? '注册中...' : '空闲';
+        document.getElementById('stat-reg').className = s.running ? 'text-lg font-semibold text-yellow-400' : 'text-lg font-semibold text-green-400';
+
+        // IP 切换提醒检测
+        if (s.ip_reminder && s.ip_reminder.waiting) {
+            document.getElementById('ip-done-count').textContent = s.ip_reminder.total_done;
+            document.getElementById('ip-current-interval').textContent = s.ip_reminder.interval;
+            document.getElementById('ip-modal').classList.remove('hidden');
+            document.getElementById('ip-custom-row').classList.add('hidden');
+        }
+
+        // 阶段指示
+        const phaseEl = document.getElementById('reg-phase');
+        if (s.phase) {
+            phaseEl.textContent = s.phase;
+            const isWarn = s.phase === '人机验证' || s.phase === '等待切换 IP';
+            phaseEl.className = isWarn
+                ? 'text-sm font-medium text-yellow-400 bg-yellow-500/10 px-3 py-1 rounded-full animate-pulse'
+                : 'text-sm font-medium text-blue-400 bg-blue-500/10 px-3 py-1 rounded-full';
+        }
+        document.getElementById('reg-current-info').textContent =
+            s.current > 0 ? `正在处理第 ${s.current} 个（共 ${s.total} 个）` : '';
+
+        // 已完成账号
+        const resDiv = document.getElementById('reg-results');
+        if (s.results && s.results.length > 0) {
+            resDiv.classList.remove('hidden');
+            resDiv.innerHTML = s.results.map(r => {
+                const icon = r.status === 'success' ? '✓' : '✗';
+                const cls = r.status === 'success' ? 'text-green-400' : 'text-red-400';
+                return `<div class="flex items-center gap-2 text-sm ${cls}">
+                    <span class="font-bold">${icon}</span>
+                    <span class="text-white">${r.name}</span>
+                    <span class="text-gray-500">${r.email}</span>
+                    ${r.api_key ? `<code class="key-text text-gray-400">${r.api_key}</code>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        // 日志（带颜色）
+        const logDiv = document.getElementById('reg-log');
+        logDiv.innerHTML = s.log.map(colorLog).join('');
+        logDiv.scrollTop = logDiv.scrollHeight;
+
+        if (s.running) {
+            setTimeout(pollRegisterStatus, 1500);
+        } else {
+            document.getElementById('reg-title').innerHTML =
+                '<span class="text-green-400">✓</span> <span>注册完成</span>';
+            loadAccounts();
+        }
+    } catch (e) {
+        setTimeout(pollRegisterStatus, 3000);
+    }
+}
+
+// ── IP 切换提醒 ──
+function showCustomInterval() {
+    document.getElementById('ip-custom-row').classList.toggle('hidden');
+}
+
+async function ipRespond(action) {
+    try {
+        await fetch('/api/ip_reminder/respond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+        });
+        document.getElementById('ip-modal').classList.add('hidden');
+        if (action === 'disable') showToast('已关闭 IP 切换提醒');
+        else showToast('已确认，继续注册');
+    } catch (e) {
+        showToast('操作失败: ' + e.message);
+    }
+}
+
+async function ipRespondCustom() {
+    const val = parseInt(document.getElementById('ip-custom-val').value) || 5;
+    try {
+        await fetch('/api/ip_reminder/respond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'custom', interval: val }),
+        });
+        document.getElementById('ip-modal').classList.add('hidden');
+        showToast(`已设置：每 ${val} 个账号提醒一次`);
+    } catch (e) {
+        showToast('操作失败: ' + e.message);
+    }
+}
+
+// ── IP 提醒设置 ──
+async function setIpInterval(val) {
+    const interval = parseInt(val);
+    try {
+        await fetch('/api/ip_reminder/setting', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interval }),
+        });
+        showToast(interval > 0 ? `IP 提醒: 每 ${interval} 个账号` : 'IP 提醒已关闭');
+    } catch (e) {
+        showToast('设置失败: ' + e.message);
+    }
+}
+
+async function loadIpSetting() {
+    try {
+        const resp = await fetch('/api/ip_reminder/setting');
+        const r = await resp.json();
+        const sel = document.getElementById('ip-interval-select');
+        if (!r.enabled) {
+            sel.value = '0';
+        } else {
+            const opts = [...sel.options].map(o => parseInt(o.value));
+            sel.value = opts.includes(r.interval) ? r.interval : '5';
+        }
+    } catch (e) {}
+}
+
+// ── 导出 Key ──
+async function exportKeys() {
+    try {
+        const resp = await fetch('/api/export_keys');
+        const text = await resp.text();
+        if (!text.trim()) { showToast('没有可导出的 Key'); return; }
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'cerebras_keys.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+        const count = text.trim().split('\n').length;
+        showToast(`已导出 ${count} 个 Key`);
+    } catch (e) {
+        showToast('导出失败: ' + e.message);
+    }
+}
+
+// ── 速度模式 ──
+async function setSpeedMode(mode) {
+    try {
+        const resp = await fetch('/api/speed_mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+        });
+        const r = await resp.json();
+        if (r.ok) showToast(`速度模式: ${mode === 'fast' ? '快速' : mode === 'standard' ? '标准' : '缓慢'}`);
+    } catch (e) {
+        showToast('切换失败: ' + e.message);
+    }
+}
+
+async function loadSpeedMode() {
+    try {
+        const resp = await fetch('/api/speed_mode');
+        const r = await resp.json();
+        document.getElementById('speed-mode').value = r.mode;
+    } catch (e) {}
+}
+
+// 初始化
+loadAccounts();
+loadSpeedMode();
+loadIpSetting();
+</script>
+</body>
+</html>
