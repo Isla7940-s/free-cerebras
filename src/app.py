@@ -24,6 +24,7 @@ register_state = {
     "phase": "",
     "results": [],
     "log": [],
+    "stop_requested": False,
 }
 _state_lock = threading.Lock()
 
@@ -271,6 +272,7 @@ def _run_register(count: int, parallel: int = 1):
     """在后台线程中执行注册（支持并行）"""
     with _state_lock:
         register_state["running"] = True
+        register_state["stop_requested"] = False
         register_state["total"] = count
         register_state["done"] = 0
         register_state["current"] = 0
@@ -291,6 +293,10 @@ def _run_register(count: int, parallel: int = 1):
             with CerebrasRegistrar() as reg:
                 for i in range(count):
                     with _state_lock:
+                        if register_state["stop_requested"]:
+                            register_state["phase"] = "已停止"
+                            register_state["log"].append("[WRN] 收到停止指令，已停止后续注册")
+                            break
                         register_state["current"] = i + 1
                         register_state["phase"] = "准备注册"
                         register_state["log"].append(
@@ -328,11 +334,24 @@ def _run_register(count: int, parallel: int = 1):
                 # 清理已完成的线程
                 active = [(t, w) for t, w in active if t.is_alive()]
 
+                stop_now = False
+                with _state_lock:
+                    stop_now = register_state["stop_requested"]
+                if stop_now and launched >= count and not active:
+                    break
+
                 with _state_lock:
                     register_state["current"] = launched
                     if active:
                         wids = ", ".join(str(w) for _, w in active)
                         register_state["phase"] = f"Worker {wids} 运行中"
+
+                # 停止检查：不再拉起新 worker，等待已启动 worker 收尾
+                with _state_lock:
+                    if register_state["stop_requested"] and launched < count:
+                        launched = count
+                        register_state["phase"] = "停止中"
+                        register_state["log"].append("[WRN] 收到停止指令，等待运行中的 Worker 结束...")
 
                 # IP 提醒检查：所有活跃 worker 完成后才提醒
                 check_remind = False
@@ -399,7 +418,7 @@ def _run_register(count: int, parallel: int = 1):
         logger.remove(sink_id)
         with _state_lock:
             register_state["running"] = False
-            register_state["phase"] = "已完成"
+            register_state["phase"] = "已停止" if register_state["stop_requested"] else "已完成"
             register_state["log"].append("━━━ 注册任务已结束 ━━━")
             register_state["log"].append("By Isla7940")
 
@@ -416,6 +435,21 @@ def api_register_start():
     t.start()
     mode = "流水线" if parallel > 1 else "串行"
     return jsonify({"ok": True, "msg": f"已启动注册 {count} 个账号（{mode}，并行 {parallel}）"})
+
+
+@app.route("/api/register/stop", methods=["POST"])
+def api_register_stop():
+    """请求停止注册任务"""
+    with _state_lock:
+        if not register_state["running"]:
+            return jsonify({"ok": False, "msg": "当前没有正在运行的注册任务"})
+        if register_state["stop_requested"]:
+            return jsonify({"ok": True, "msg": "停止请求已发送，请等待当前任务收尾"})
+        register_state["stop_requested"] = True
+        register_state["phase"] = "停止中"
+        register_state["log"].append("[WRN] 用户点击了立即停止")
+    _ip_confirm_event.set()
+    return jsonify({"ok": True, "msg": "停止请求已发送，正在停止中"})
 
 
 @app.route("/api/register/status")

@@ -215,6 +215,27 @@
 <script>
 let accounts = [];
 let testResults = {};
+let pendingStopRequest = false;
+
+function updateRegisterButton(isRunning, stopRequested = false) {
+    const btn = document.getElementById('btn-register');
+    if (!btn) return;
+    if (isRunning) {
+        const stopping = stopRequested || pendingStopRequest;
+        btn.classList.remove('btn-success');
+        btn.classList.add('btn-danger');
+        btn.innerHTML = stopping ? '<span>停止中...</span>' : '<span>立即停止</span>';
+        btn.onclick = stopRegister;
+        btn.disabled = stopping;
+    } else {
+        btn.classList.remove('btn-danger');
+        btn.classList.add('btn-success');
+        btn.innerHTML = '<span>开始注册</span>';
+        btn.onclick = startRegister;
+        pendingStopRequest = false;
+        btn.disabled = false;
+    }
+}
 
 function showToast(msg, duration = 3000) {
     const t = document.getElementById('toast');
@@ -383,13 +404,45 @@ async function startRegister() {
         showToast(r.msg);
         if (r.ok) {
             document.getElementById('register-panel').classList.remove('hidden');
+            updateRegisterButton(true, false);
             pollRegisterStatus();
+        } else {
+            btn.disabled = false;
         }
     } catch (e) {
-        showToast('启动注册失败: ' + e.message);
-    } finally {
         btn.disabled = false;
+        showToast('启动注册失败: ' + e.message);
     }
+}
+
+async function stopRegister() {
+    if (pendingStopRequest) return;
+    pendingStopRequest = true;
+    updateRegisterButton(true, true);
+    try {
+        const resp = await fetch('/api/register/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const r = await resp.json();
+        showToast(r.msg || '停止请求已发送');
+        if (!r.ok) {
+            pendingStopRequest = false;
+        }
+    } catch (e) {
+        pendingStopRequest = false;
+        showToast('停止失败: ' + e.message);
+    } finally {
+        refreshRegisterButtonStatus();
+    }
+}
+
+async function refreshRegisterButtonStatus() {
+    try {
+        const resp = await fetch('/api/register/status');
+        const s = await resp.json();
+        updateRegisterButton(s.running, s.stop_requested);
+    } catch (e) {}
 }
 
 function colorLog(line) {
@@ -409,13 +462,14 @@ async function pollRegisterStatus() {
         document.getElementById('reg-bar').style.width = pct + '%';
         document.getElementById('stat-reg').textContent = s.running ? '注册中...' : '空闲';
         document.getElementById('stat-reg').className = s.running ? 'text-lg font-semibold text-yellow-400' : 'text-lg font-semibold text-green-400';
+        updateRegisterButton(s.running, s.stop_requested);
 
         // IP 切换提醒检测
         if (s.ip_reminder && s.ip_reminder.waiting) {
-            document.getElementById('ip-done-count').textContent = s.ip_reminder.total_done;
-            document.getElementById('ip-current-interval').textContent = s.ip_reminder.interval;
-            document.getElementById('ip-modal').classList.remove('hidden');
-            document.getElementById('ip-custom-row').classList.add('hidden');
+            const doneCountEl = document.getElementById('ip-done-count');
+            const modalEl = document.getElementById('ip-modal');
+            if (doneCountEl) doneCountEl.textContent = s.ip_reminder.total_done;
+            if (modalEl) modalEl.classList.remove('hidden');
         }
 
         // 阶段指示
@@ -455,7 +509,9 @@ async function pollRegisterStatus() {
             setTimeout(pollRegisterStatus, 1500);
         } else {
             document.getElementById('reg-title').innerHTML =
-                '<span class="text-green-400">✓</span> <span>注册完成</span>';
+                s.stop_requested
+                    ? '<span class="text-yellow-400">■</span> <span>注册已停止</span>'
+                    : '<span class="text-green-400">✓</span> <span>注册完成</span>';
             loadAccounts();
         }
     } catch (e) {
@@ -465,7 +521,8 @@ async function pollRegisterStatus() {
 
 // ── IP 切换提醒 ──
 function showCustomInterval() {
-    document.getElementById('ip-custom-row').classList.toggle('hidden');
+    const customRow = document.getElementById('ip-custom-row');
+    if (customRow) customRow.classList.toggle('hidden');
 }
 
 async function ipRespond(action) {
@@ -484,7 +541,8 @@ async function ipRespond(action) {
 }
 
 async function ipRespondCustom() {
-    const val = parseInt(document.getElementById('ip-custom-val').value) || 5;
+    const customValEl = document.getElementById('ip-custom-val');
+    const val = customValEl ? (parseInt(customValEl.value) || 5) : 5;
     try {
         await fetch('/api/ip_reminder/respond', {
             method: 'POST',
