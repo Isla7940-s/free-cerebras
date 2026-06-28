@@ -1,3 +1,5 @@
+# 已过时
+
 # Cerebras 批量自动注册工具
 
 By Isla7940
